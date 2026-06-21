@@ -109,4 +109,8 @@ Then `python3 app.py` and refresh — the dashboard now shows your real portfoli
 | `churn.py` | Trading-vs-holding churn analysis |
 | `make_demo.py` | Generate throwaway synthetic data for screenshots |
 
+## Author
+
+Built by **Yueqi Zhang**.
+
 Built with Flask + Chart.js. Unofficial; not affiliated with Trade Republic.
