@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trading Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root { --bg:#0f1419; --card:#1a2029; --line:#2a323d; --txt:#e6edf3;
+          --muted:#8b97a6; --pos:#3fb950; --neg:#f85149; --accent:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt);
+         font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; }
+  header { padding:20px 28px; border-bottom:1px solid var(--line); }
+  h1 { margin:0; font-size:20px; }
+  .sub { color:var(--muted); font-size:13px; margin-top:4px; }
+  .wrap { padding:24px 28px; max-width:1200px; margin:0 auto; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+           gap:16px; margin-bottom:24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
+          padding:16px 18px; }
+  .card .label { color:var(--muted); font-size:12px; text-transform:uppercase;
+                 letter-spacing:.5px; }
+  .card .value { font-size:26px; font-weight:600; margin-top:6px; }
+  .card .note { color:var(--muted); font-size:12px; margin-top:4px; }
+  .pos { color:var(--pos); } .neg { color:var(--neg); }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:10px;
+           padding:18px; margin-bottom:24px; }
+  .panel h2 { margin:0 0 4px; font-size:15px; }
+  .panel .hint { color:var(--muted); font-size:12px; margin-bottom:14px; }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:24px; }
+  @media (max-width:820px){ .grid2 { grid-template-columns:1fr; } }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:right; padding:7px 10px; border-bottom:1px solid var(--line); }
+  th:first-child,td:first-child { text-align:left; }
+  th { color:var(--muted); font-weight:500; cursor:pointer; user-select:none; }
+  tr:hover td { background:#222b36; }
+  .tag { font-size:10px; padding:2px 6px; border-radius:4px; margin-left:6px;
+         vertical-align:middle; }
+  .tag.open { background:#1f3a52; color:#79c0ff; }
+  .tag.core { background:#3a2f52; color:#d2a8ff; }
+  .banner { background:#1f2a1a; border:1px solid #2d4a22; color:#aff5b4;
+            padding:12px 16px; border-radius:8px; font-size:13px; margin-bottom:20px; }
+  canvas { max-height:300px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📈 TR Insight — Trade Republic Portfolio Analyzer</h1>
+  <div class="sub">Exact FIFO P&L · true total return · churn analysis · all values EUR</div>
+</header>
+<div class="wrap">
+  <div class="banner" id="banner">Loading…</div>
+
+  <div class="cards" id="cards"></div>
+
+  <div class="panel" id="pnlPanel">
+    <h2>Realized P&L by instrument</h2>
+    <div class="hint">Green = net cash returned exceeds cash invested. Bars marked
+      OPEN still hold an open position, so a negative bar there is money still
+      invested, <b>not</b> a loss.</div>
+    <canvas id="pnlChart"></canvas>
+  </div>
+
+  <div class="panel">
+    <h2>Daily churn (gross volume traded)</h2>
+    <div class="hint">How much money you moved through orders each day.</div>
+    <canvas id="dailyChart"></canvas>
+  </div>
+
+  <div class="panel" id="tblPanel">
+    <h2>Per-instrument detail</h2>
+    <div class="hint">Click a column header to sort. "Trips" = min(buys, sells) = completed round-trips.</div>
+    <table id="tbl">
+      <thead><tr>
+        <th data-k="name">Instrument</th>
+        <th data-k="bought">Invested</th>
+        <th data-k="sold">Returned</th>
+        <th data-k="dividends">Dividends</th>
+        <th data-k="net">Net P&L</th>
+        <th data-k="n_buys">Buys</th>
+        <th data-k="n_sells">Sells</th>
+        <th data-k="trips">Trips</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const eur = n => (n<0?"−":"") + "€" + Math.abs(n).toLocaleString("en",
+  {minimumFractionDigits:2, maximumFractionDigits:2});
+const cls = n => n>=0 ? "pos" : "neg";
+
+async function load() {
+  const [s, inst, daily, fifo, churn, total, cashflow, trades, cash] = await Promise.all([
+    fetch("/api/summary").then(r=>r.json()),
+    fetch("/api/instruments").then(r=>r.json()),
+    fetch("/api/daily").then(r=>r.json()),
+    fetch("/api/fifo").then(r=>r.json()).catch(()=>({available:false})),
+    fetch("/api/churn").then(r=>r.json()).catch(()=>({available:false})),
+    fetch("/api/total").then(r=>r.json()).catch(()=>({available:false})),
+    fetch("/api/cashflow").then(r=>r.json()).catch(()=>({available:false})),
+    fetch("/api/trades").then(r=>r.json()).catch(()=>({available:false})),
+    fetch("/api/cash").then(r=>r.json()).catch(()=>({available:false})),
+  ]);
+  const exact = (total && total.available) || (fifo && fifo.available);
+  const realTrades = (trades && trades.available) ? trades.trades : null;
+  renderHeadline(total, cash);
+  renderBanner(s, exact); renderCards(s, exact, cashflow, total, cash);
+  renderDaily(daily);  // /api/daily already returns real data when an export exists
+  if (realTrades) renderTrades(realTrades);
+  // The approximate cash-flow P&L chart/table are MISLEADING when a position
+  // was opened before the data window (e.g. Amazon shows full sale as "profit").
+  // Only show them as a fallback when no exact FIFO data is available; hide the
+  // static panels entirely when exact data supersedes them.
+  if (!exact) {
+    renderPnl(inst); renderTable(inst);
+  } else {
+    document.getElementById("pnlPanel").style.display = "none";
+    document.getElementById("tblPanel").style.display = "none";
+  }
+  const prices = await fetch("/api/prices").then(r=>r.json()).catch(()=>({available:false}));
+  if (total && total.available) renderTotal(total);
+  if (fifo && fifo.available) { renderFifo(fifo); renderExactTable(total && total.available ? total : fifo); }
+  if (prices && prices.available) renderPrices(prices.data);
+  if (churn && churn.available) renderChurn(churn);
+}
+
+function renderHeadline(total, cash) {
+  const holdings = (total && total.available) ? (total.holdings_value || 0) : null;
+  const avail = (cash && cash.available && cash.available_cash != null) ? cash.available_cash : null;
+  if (holdings == null && avail == null) return;
+  const totalVal = (holdings || 0) + (avail || 0);
+  const ret = (total && total.available) ? total.total_return : null;
+  const host = document.createElement("div");
+  host.id = "headline";
+  host.innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:28px;align-items:baseline;
+                padding:18px 22px;background:linear-gradient(135deg,#13233a,#0f1419);
+                border:1px solid #1f4068;border-radius:12px;margin-bottom:22px">
+      <div>
+        <div style="color:#8b97a6;font-size:12px;text-transform:uppercase;letter-spacing:.5px">Total account value</div>
+        <div style="font-size:30px;font-weight:700">${eur(totalVal)}</div>
+      </div>
+      ${avail!=null?`<div><div style="color:#8b97a6;font-size:12px">Available cash</div>
+        <div style="font-size:20px">${eur(avail)}</div></div>`:""}
+      ${holdings!=null?`<div><div style="color:#8b97a6;font-size:12px">Stock holdings</div>
+        <div style="font-size:20px">${eur(holdings)}</div></div>`:""}
+      ${ret!=null?`<div><div style="color:#8b97a6;font-size:12px">Total return</div>
+        <div style="font-size:20px" class="${cls(ret)}">${eur(ret)}</div></div>`:""}
+    </div>`;
+  const wrap = document.querySelector(".wrap");
+  wrap.insertBefore(host, wrap.firstChild);
+}
+
+function renderTrades(trades) {
+  const fmt = t => t ? t.slice(0,10) + " " + t.slice(11,16) : "";
+  const host = document.createElement("div");
+  host.className = "panel";
+  const realized = trades.filter(t=>t.pnl!=null);
+  const wins = realized.filter(t=>t.pnl>=0).length;
+  host.innerHTML = `
+    <h2>🕒 Recent trades (latest ${trades.length})</h2>
+    <div class="hint">Newest first. P&L shown on sells (FIFO realized);
+      buys realize nothing. ${realized.length} closed sells, ${wins} green.
+      “—” P&L means the matching buy is before your export window.</div>
+    <table><thead><tr>
+      <th>Time</th><th>Instrument</th><th>Side</th><th>Shares</th>
+      <th>Price</th><th>Value</th><th>P&L</th>
+    </tr></thead><tbody>${
+      trades.map(t=>`<tr>
+        <td style="white-space:nowrap">${fmt(t.time)}</td>
+        <td>${t.name}</td>
+        <td style="color:${t.side==='buy'?'#58a6ff':'#d2a8ff'}">${t.side}</td>
+        <td>${t.shares}</td>
+        <td>${eur(t.price)}</td>
+        <td>${eur(t.value)}</td>
+        <td class="${t.pnl==null?'':cls(t.pnl)}">${t.pnl==null?'—':eur(t.pnl)}</td>
+      </tr>`).join("")
+    }</tbody></table>`;
+  document.querySelector(".wrap").appendChild(host);
+}
+
+function renderExactTable(src) {
+  // Authoritative per-instrument detail from FIFO (and total return if present).
+  const rows = src.instruments.map(r => ({
+    name: r.name,
+    realized: r.realized,
+    unrealized: ("unrealized" in r) ? r.unrealized : 0,
+    total: ("total" in r) ? r.total : r.realized,
+    open_shares: r.open_shares || 0,
+    wins: r.wins || 0, losses: r.losses || 0,
+    no_basis: r.no_basis || false,
+  })).sort((a,b)=>b.total-a.total);
+  const host = document.createElement("div");
+  host.className = "panel";
+  host.innerHTML = `
+    <h2>Per-instrument detail (exact, FIFO)</h2>
+    <div class="hint">Realized = closed trades; Unrealized = open shares at market;
+      Total = your true gain/loss. This supersedes the cash-flow estimate.</div>
+    <table><thead><tr>
+      <th>Instrument</th><th>Realized</th><th>Unrealized</th><th>Total</th>
+      <th>Open shares</th><th>W/L</th>
+    </tr></thead><tbody>${
+      rows.map(r=>`<tr><td>${r.name}${r.no_basis?' <span class="tag" style="background:#5c4a17;color:#f0d98c" title="Bought before your export window — cost basis unknown, P&L unreliable">⚠ no buy data</span>':''}</td>
+        <td class="${cls(r.realized)}">${eur(r.realized)}</td>
+        <td class="${cls(r.unrealized)}">${r.unrealized?eur(r.unrealized):"—"}</td>
+        <td class="${cls(r.total)}">${eur(r.total)}</td>
+        <td>${r.open_shares?r.open_shares.toFixed(4):"—"}</td>
+        <td>${r.wins}/${r.losses}</td></tr>`).join("")
+    }</tbody></table>`;
+  document.querySelector(".wrap").appendChild(host);
+}
+
+let priceChart=null;
+function renderPrices(data) {
+  const tickers = Object.keys(data).sort();
+  if (!tickers.length) return;
+  const host = document.createElement("div");
+  host.className = "panel";
+  host.innerHTML = `
+    <h2>📉 Price history with your entries & exits</h2>
+    <div class="hint">Daily close (line) with your actual trades:
+      <span style="color:#3fb950">▲ buy</span> ·
+      <span style="color:#f85149">▼ sell</span>. Marker height = your executed price.
+      Use this to see where your timing helped or hurt.</div>
+    <select id="priceSel" style="background:#0f1419;color:#e6edf3;border:1px solid var(--line);
+      border-radius:6px;padding:6px 10px;margin-bottom:12px">
+      ${tickers.map(t=>`<option value="${t}">${data[t].name} (${t})</option>`).join("")}
+    </select>
+    <canvas id="priceChart"></canvas>`;
+  document.querySelector(".wrap").appendChild(host);
+  const draw = (t) => {
+    const d = data[t];
+    const labels = d.prices.map(p=>p.date);
+    const line = d.prices.map(p=>p.close);
+    const byDate = Object.fromEntries(d.prices.map(p=>[p.date,p.close]));
+    const buys = d.trades.filter(x=>x.side==="buy").map(x=>({x:x.date,y:x.price}));
+    const sells = d.trades.filter(x=>x.side==="sell").map(x=>({x:x.date,y:x.price}));
+    if (priceChart) priceChart.destroy();
+    priceChart = new Chart(host.querySelector("#priceChart"), {
+      type:"line",
+      data:{ labels,
+        datasets:[
+          {label:`${t} close`, data:line, borderColor:"#58a6ff", borderWidth:1.5,
+           pointRadius:0, tension:.15},
+          {label:"Buy", data:buys, type:"scatter", showLine:false,
+           pointStyle:"triangle", radius:8, backgroundColor:"#3fb950", borderColor:"#3fb950"},
+          {label:"Sell", data:sells, type:"scatter", showLine:false,
+           pointStyle:"triangle", rotation:180, radius:8,
+           backgroundColor:"#f85149", borderColor:"#f85149"},
+        ]},
+      options:{ parsing:{xAxisKey:"x",yAxisKey:"y"},
+        plugins:{legend:{labels:{color:"#e6edf3"}}},
+        scales:{ x:{grid:{color:"#1f262e"},ticks:{color:"#8b97a6",maxTicksLimit:12}},
+                 y:{grid:{color:"#1f262e"},ticks:{color:"#8b97a6"}} } }
+    });
+  };
+  host.querySelector("#priceSel").onchange = e => draw(e.target.value);
+  draw(tickers[0]);
+}
+
+function renderTotal(t) {
+  const inst = [...t.instruments].sort((a,b)=>a.total-b.total);
+  const hasPf = t.have_portfolio;
+  const host = document.createElement("div");
+  host.innerHTML = `
+    <div class="banner" style="background:#10261c;border-color:#1f5036;color:#9ff0c4">
+      💼 <b>Current stock holdings value:</b>
+      <b style="font-size:18px">${eur(t.holdings_value||0)}</b> &nbsp;·&nbsp;
+      🏆 <b>True total return</b> (realized + unrealized):
+      <b class="${cls(t.total_return)}" style="font-size:18px">${eur(t.total_return)}</b>
+      &nbsp;(<span class="${cls(t.realized_total)}">${eur(t.realized_total)}</span> realized
+      + <span class="${cls(t.unrealized_total)}">${eur(t.unrealized_total)}</span> unrealized).
+      ${hasPf?"":"<br><span style='color:#f0c674'>⚠️ No portfolio.csv — open positions valued at €0. Run: <code>python3 fetch_portfolio.py</code></span>"}
+    </div>
+    <div class="panel">
+      <h2>Total return by instrument (realized + unrealized)</h2>
+      <div class="hint">Green bars include the current market value of shares you
+        still hold — so positions like FTSE All-World are no longer shown as a
+        loss just because you haven't sold them.</div>
+      <canvas id="totalChart"></canvas>
+    </div>`;
+  const wrap = document.querySelector(".wrap");
+  wrap.insertBefore(host, document.getElementById("cards"));
+  new Chart(host.querySelector("#totalChart"), {
+    type:"bar",
+    data:{ labels: inst.map(r=>r.name),
+      datasets:[
+        {label:"Realized", data:inst.map(r=>r.realized), backgroundColor:"#58a6ff", stack:"s"},
+        {label:"Unrealized", data:inst.map(r=>r.unrealized), backgroundColor:"#3fb950", stack:"s"},
+      ]},
+    options:{ indexAxis:"y",
+      plugins:{legend:{labels:{color:"#e6edf3"}},
+        tooltip:{callbacks:{afterBody:items=>{const r=inst[items[0].dataIndex];
+          return `total ${eur(r.total)}`+(r.open_shares?` · ${r.open_shares} shares held @ mkt ${eur(r.market_value)}`:"");}}}},
+      scales:{ x:{stacked:true,grid:{color:"#2a323d"},ticks:{color:"#8b97a6"}},
+               y:{stacked:true,grid:{display:false},ticks:{color:"#e6edf3",font:{size:11}}} } }
+  });
+}
+
+function renderChurn(c) {
+  const inst = c.instruments.filter(r=>Math.abs(r.churn_cost) > 0.005);
+  const hurt = inst.filter(r=>r.churn_cost < 0);
+  const host = document.createElement("div");
+  host.className = "panel";
+  const verdict = c.total_churn_cost < 0
+    ? `Your trading <b class="neg">lost ${eur(-c.total_churn_cost)}</b> versus simply buying at the start and selling at the end.`
+    : `Your trading <b class="pos">added ${eur(c.total_churn_cost)}</b> versus buy-and-hold.`;
+  host.innerHTML = `
+    <h2>🔁 Churn cost — did trading beat holding?</h2>
+    <div class="hint">For each stock: your real round-trip P&L (“Churned”) vs a
+      single buy-at-first-price / sell-at-last-price (“Held”), using only your
+      own executed prices. ${verdict}</div>
+    <canvas id="churnChart"></canvas>
+    <table style="margin-top:16px"><thead><tr>
+      <th>Instrument</th><th>Trades</th><th>Churned</th><th>Held</th><th>Churn cost</th>
+    </tr></thead><tbody>${
+      inst.map(r=>`<tr><td>${r.name}</td><td>${r.trades}</td>
+        <td class="${cls(r.actual)}">${eur(r.actual)}</td>
+        <td class="${cls(r.hold)}">${eur(r.hold)}</td>
+        <td class="${cls(r.churn_cost)}">${eur(r.churn_cost)}</td></tr>`).join("")
+    }</tbody></table>`;
+  document.querySelector(".wrap").appendChild(host);
+  new Chart(host.querySelector("#churnChart"), {
+    type:"bar",
+    data:{ labels: inst.map(r=>`${r.name} (${r.trades})`),
+      datasets:[{ label:"Churn cost vs holding", data: inst.map(r=>r.churn_cost),
+        backgroundColor: inst.map(r=>r.churn_cost>=0?"#3fb950":"#f85149") }]},
+    options:{ indexAxis:"y", plugins:{legend:{display:false},
+        tooltip:{callbacks:{label:c2=>{const r=inst[c2.dataIndex];
+          return `churn ${eur(r.churn_cost)} · churned ${eur(r.actual)} vs held ${eur(r.hold)}`;}}}},
+      scales:{ x:{grid:{color:"#2a323d"},ticks:{color:"#8b97a6"}},
+               y:{grid:{display:false},ticks:{color:"#e6edf3",font:{size:11}}} } }
+  });
+}
+
+function renderFifo(f) {
+  // Promote exact FIFO data to the top of the page.
+  const inst = [...f.instruments].sort((a,b)=>a.realized-b.realized);
+  const wins = inst.reduce((n,r)=>n+r.wins,0);
+  const losses = inst.reduce((n,r)=>n+r.losses,0);
+  const best = inst[inst.length-1], worst = inst[0];
+  const host = document.createElement("div");
+  host.innerHTML = `
+    <div class="banner" style="background:#13233a;border-color:#1f4068;color:#acd2ff">
+      ✅ <b>Exact data loaded</b> (pytr, share-level FIFO).
+      True realized P&L: <b class="${cls(f.total_realized)}">${eur(f.total_realized)}</b>
+      · win rate <b>${f.win_rate}%</b> over <b>${f.n_trades}</b> closed trades
+      · best <b>${best.name} ${eur(best.realized)}</b> · worst <b>${worst.name} ${eur(worst.realized)}</b>.
+      ${f.skipped_events?`<span style="color:#8b97a6">(${f.skipped_events} events skipped)</span>`:""}
+    </div>
+    <div class="panel">
+      <h2>Exact realized P&L by instrument (FIFO)</h2>
+      <div class="hint">Computed from real share quantities, prices, and fees.
+        This is the authoritative number — it supersedes the cash-flow estimate below.</div>
+      <canvas id="fifoChart"></canvas>
+    </div>`;
+  const wrap = document.querySelector(".wrap");
+  wrap.insertBefore(host, document.getElementById("cards"));
+  new Chart(host.querySelector("#fifoChart"), {
+    type:"bar",
+    data:{ labels: inst.map(r=>r.name),
+      datasets:[{ data: inst.map(r=>r.realized),
+        backgroundColor: inst.map(r=> r.realized>=0?"#3fb950":"#f85149") }]},
+    options:{ indexAxis:"y", plugins:{legend:{display:false},
+        tooltip:{callbacks:{label:c=>{const r=inst[c.dataIndex];
+          return `${eur(r.realized)}  (${r.wins}W/${r.losses}L`+
+                 (r.open_shares?`, ${r.open_shares} still open)`:")");}}}},
+      scales:{ x:{grid:{color:"#2a323d"},ticks:{color:"#8b97a6"}},
+               y:{grid:{display:false},ticks:{color:"#e6edf3",font:{size:11}}} } }
+  });
+}
+
+function renderBanner(s, exact) {
+  // When exact FIFO/total-return data exists, the 🏆 banner shows the real
+  // number, so this approximate one is hidden to avoid two conflicting figures.
+  if (exact) { document.getElementById("banner").style.display = "none"; return; }
+  const c = s.closed;
+  document.getElementById("banner").innerHTML =
+    `<b>Most trustworthy figure:</b> across ${c.instruments} fully round-tripped ` +
+    `instruments your realized P&L is <b class="${cls(c.total_net)}">${eur(c.total_net)}</b> ` +
+    `at a ${c.win_rate}% win rate (${c.winners}W / ${c.losers}L). ` +
+    `Open positions are excluded because their P&L isn't realized yet.`;
+}
+
+function renderCards(s, exact, cf, total, cash) {
+  // Prefer the REAL cash summary computed from the pytr export. The legacy
+  // s.account figures come from the demo transactions.py and are wrong once a
+  // real export is loaded, so only fall back to them when cashflow is absent.
+  let cards;
+  if (cf && cf.available) {
+    const hasRealCash = cash && cash.available && cash.available_cash != null;
+    cards = [
+      // Available cash: ONLY the live figure from TR (the export-summed balance
+      // is unreliable, so we don't show it). Card is omitted if not fetched.
+      ...(hasRealCash ? [["Available cash", eur(cash.available_cash), "live, from Trade Republic", ""]] : []),
+      ...(total && total.available ? [["Stock holdings value", eur(total.holdings_value||0), "current market value", ""]] : []),
+      ["Interest earned", eur(cf.interest), "cash interest", cf.interest>=0?"pos":""],
+      ["Dividends", eur(cf.dividends), "cash dividends", cf.dividends>=0?"pos":""],
+      ["Tax", eur(cf.tax), "tax paid / refunded", ""],
+      ["Gross buys", eur(cf.gross_buys), "total invested", ""],
+      ["Gross sells", eur(cf.gross_sells), "total proceeds", ""],
+    ];
+  } else {
+    const a = s.account;
+    cards = [
+      ["Net funded (your cash in)", eur(a.net_funded), "deposits + transfers − withdrawals", ""],
+      ...(exact ? [] : [["Closed-trade P&L", eur(s.closed.total_net), `${s.closed.win_rate}% win rate`, cls(s.closed.total_net)]]),
+      ["Cash balance (approx)", eur(a.cash_balance), "running cash from feed", ""],
+      ["Orders placed", a.n_orders, "buy + sell + savings", ""],
+      ["Interest earned", eur(a.interest), "2% p.a. on cash", "pos"],
+      ["Tax corrections", eur(a.tax_corrections), "refunds/true-ups", "pos"],
+      ["Gross traded volume", eur(a.gross_buys + a.gross_sells), "total churn through account", ""],
+      ["Dividends", eur(a.dividends), "cash dividends", "pos"],
+    ];
+  }
+  document.getElementById("cards").innerHTML = cards.map(([l,v,n,c]) =>
+    `<div class="card"><div class="label">${l}</div>
+     <div class="value ${c}">${v}</div><div class="note">${n}</div></div>`).join("");
+}
+
+let pnlChart, bookChart, dailyChart;
+function renderPnl(inst) {
+  const rows = [...inst].sort((a,b)=>a.net-b.net);
+  new Chart(document.getElementById("pnlChart"), {
+    type:"bar",
+    data:{ labels: rows.map(r=>r.name + (r.still_open?" ⊙":"")),
+      datasets:[{ data: rows.map(r=>r.net),
+        backgroundColor: rows.map(r=> r.net>=0 ? "#3fb950" : (r.still_open?"#6e7681":"#f85149")) }]},
+    options:{ indexAxis:"y", plugins:{legend:{display:false},
+        tooltip:{callbacks:{label:c=>eur(c.raw) + (rows[c.dataIndex].still_open?" (position still open)":"")}}},
+      scales:{ x:{ grid:{color:"#2a323d"}, ticks:{color:"#8b97a6"} },
+               y:{ grid:{display:false}, ticks:{color:"#e6edf3", font:{size:11}} } } }
+  });
+}
+
+function renderDaily(daily) {
+  new Chart(document.getElementById("dailyChart"), {
+    type:"bar",
+    data:{ labels: daily.map(d=>d.date.slice(5)),
+      datasets:[{ data: daily.map(d=>d.volume), backgroundColor:"#58a6ff" }]},
+    options:{ plugins:{legend:{display:false},
+        tooltip:{callbacks:{label:c=>eur(c.raw)+" · "+daily[c.dataIndex].orders+" orders"}}},
+      scales:{ y:{ grid:{color:"#2a323d"}, ticks:{color:"#8b97a6"} },
+               x:{ grid:{display:false}, ticks:{color:"#8b97a6", maxRotation:90} } } }
+  });
+}
+
+let sortK="net", sortAsc=true, lastInst=[];
+function renderTable(inst) {
+  lastInst = inst;
+  const tb = document.querySelector("#tbl tbody");
+  const rows = [...inst].sort((a,b)=>{
+    let x=a[sortK], y=b[sortK];
+    if(typeof x==="string") return sortAsc? x.localeCompare(y): y.localeCompare(x);
+    return sortAsc? x-y : y-x;
+  });
+  tb.innerHTML = rows.map(r=>{
+    let tags = (r.core?'<span class="tag core">CORE</span>':'') +
+               (r.still_open?'<span class="tag open">OPEN</span>':'');
+    return `<tr>
+      <td>${r.name}${tags}</td>
+      <td>${eur(r.bought)}</td>
+      <td>${eur(r.sold)}</td>
+      <td>${r.dividends?eur(r.dividends):"—"}</td>
+      <td class="${cls(r.net)}">${eur(r.net)}</td>
+      <td>${r.n_buys}</td><td>${r.n_sells}</td><td>${r.trips}</td>
+    </tr>`;
+  }).join("");
+}
+document.querySelectorAll("#tbl th").forEach(th=>th.onclick=()=>{
+  const k=th.dataset.k; if(k===sortK) sortAsc=!sortAsc; else {sortK=k; sortAsc=true;}
+  renderTable(lastInst);
+});
+
+load();
+</script>
+</body>
+</html>

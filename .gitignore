@@ -1,0 +1,17 @@
+# Never commit real exported account data or credentials
+tr_docs/
+tr_export/
+*.csv
+events_with_documents.json
+other_events.json
+account_transactions.csv
+cookies.*.txt
+credentials
+tr_docs_demo/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+server.log
