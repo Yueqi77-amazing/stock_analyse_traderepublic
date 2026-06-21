@@ -397,8 +397,6 @@ function renderCards(s, exact, cf, total, cash) {
       // is unreliable, so we don't show it). Card is omitted if not fetched.
       ...(hasRealCash ? [["Available cash", eur(cash.available_cash), "live, from Trade Republic", ""]] : []),
       ...(total && total.available ? [["Stock holdings value", eur(total.holdings_value||0), "current market value", ""]] : []),
-      ["Interest earned", eur(cf.interest), "cash interest", cf.interest>=0?"pos":""],
-      ["Dividends", eur(cf.dividends), "cash dividends", cf.dividends>=0?"pos":""],
       ["Tax", eur(cf.tax), "tax paid / refunded", ""],
       ["Gross buys", eur(cf.gross_buys), "total invested", ""],
       ["Gross sells", eur(cf.gross_sells), "total proceeds", ""],
