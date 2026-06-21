@@ -9,7 +9,9 @@ import analyze
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 
-TR_DOCS = "tr_docs"
+# Data folder. Defaults to your real export in tr_docs/; override with the
+# TR_DOCS env var for a one-off demo, e.g.  TR_DOCS=tr_docs_demo python3 app.py
+TR_DOCS = os.environ.get("TR_DOCS", "tr_docs")
 
 
 def events_path():

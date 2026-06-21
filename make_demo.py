@@ -99,6 +99,10 @@ def main():
             w.writerow({"Name": name, "ISIN": isin, "quantity": qty,
                         "price": price, "netValue": round(qty * price, 2)})
 
+    # Fake available cash so the demo shows the headline / cash card too.
+    with open(os.path.join(OUT_DIR, "cash.json"), "w", encoding="utf-8") as f:
+        json.dump({"available_cash": 1842.55}, f)
+
     print(f"Wrote {len(events)} demo events + {len(HOLDINGS)} holdings to {OUT_DIR}/")
 
 
