@@ -310,9 +310,13 @@ function renderChurn(c) {
     : `Your trading <b class="pos">added ${eur(c.total_churn_cost)}</b> versus buy-and-hold.`;
   host.innerHTML = `
     <h2>🔁 Churn cost — did trading beat holding?</h2>
-    <div class="hint">For each stock: your real round-trip P&L (“Churned”) vs a
-      single buy-at-first-price / sell-at-last-price (“Held”), using only your
-      own executed prices. ${verdict}</div>
+    <div class="hint">
+      <b>Churned</b> = your real profit from all the in-and-out trades (FIFO).<br>
+      <b>Held</b> = what you'd have made buying your <i>peak position</i> once at
+      your first buy price and selling at your last sell price.<br>
+      <b>Churn cost = Churned − Held.</b> Negative (red) = your trading
+      <b>lost</b> money vs simply holding; positive = it helped.
+      Uses only your own executed prices; fees excluded on both sides. ${verdict}</div>
     <canvas id="churnChart"></canvas>
     <table style="margin-top:16px"><thead><tr>
       <th>Instrument</th><th>Trades</th><th>Churned</th><th>Held</th><th>Churn cost</th>

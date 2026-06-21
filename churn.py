@@ -30,6 +30,7 @@ def analyze(path):
     # Per instrument, collect executed buys and sells in time order.
     buys = defaultdict(list)   # key -> [(shares, price)]
     sells = defaultdict(list)
+    timeline = defaultdict(list)  # key -> [signed share delta, in time order]
     names = {}
 
     for ev in events:
@@ -42,6 +43,7 @@ def analyze(path):
         key = isin or name
         names[key] = name
         (buys if side == "buy" else sells)[key].append((shares, price))
+        timeline[key].append(shares if side == "buy" else -shares)
 
     rows = []
     for key in names:
@@ -49,18 +51,20 @@ def analyze(path):
         if not b or not s:
             continue  # need both sides to compare churn vs hold
         n_trades = len(b) + len(s)
-        bought_sh = sum(x[0] for x in b)
-        sold_sh = sum(x[0] for x in s)
-        closed_sh = min(bought_sh, sold_sh)
 
         # Actual realized P&L via simple FIFO (fees omitted here; we compare
         # like-for-like against the hold scenario which also omits fees).
         actual = _fifo_realized(b, s)
 
-        # Hold counterfactual: buy all-at-first-price, sell closed_sh at last price.
+        # Hold counterfactual: "what if I'd bought my position once at the first
+        # buy price and sold it at the last sell price". The baseline size is
+        # the PEAK shares held at any one time (the real capital committed), NOT
+        # the sum of all buys — otherwise reusing the same money across many
+        # round-trips would inflate the hold size and overstate churn cost.
+        peak = _peak_position(timeline[key])
         first_buy_px = b[0][1]
         last_sell_px = s[-1][1]
-        hold = closed_sh * (last_sell_px - first_buy_px)
+        hold = peak * (last_sell_px - first_buy_px)
 
         churn = actual - hold
         rows.append({
@@ -81,6 +85,16 @@ def analyze(path):
         "total_hold": total_hold,
         "total_churn_cost": round(total_actual - total_hold, 2),
     }
+
+
+def _peak_position(deltas):
+    """Max shares held at any single moment, walking the signed share flow."""
+    pos = peak = 0.0
+    for d in deltas:
+        pos += d
+        if pos > peak:
+            peak = pos
+    return peak
 
 
 def _fifo_realized(buys, sells):
